@@ -1,6 +1,6 @@
 <p align="center">
-
-    <img style="width: 300px" src="https://github.com/CaliDog/Lumberjack/raw/master/img/logo.png">
+    <img align="center" style="width: 300px" src="https://github.com/CaliDog/Lumberjack/raw/master/img/logo.png">
+    <h3 align="center">Axeman</h3>
     <p align="center">Harvester of certificates, bearer of flannel.</p>
 </p>
 
