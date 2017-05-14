@@ -90,3 +90,7 @@ ENV/
 
 .idea/
 *.log
+
+files.txt
+
+go.py
