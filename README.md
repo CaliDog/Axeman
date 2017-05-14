@@ -20,4 +20,4 @@ pip3 install axeman
 ## Demo
 This is axeman running in debug mode and downloading only the "skydiver" log. 
 
-<img src="http://i.imgur.com/4JEME7j.gif">
+<img src="https://github.com/CaliDog/Lumberjack/raw/master/img/demo.gif">
