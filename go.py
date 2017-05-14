@@ -1,3 +1,0 @@
-import lumberjack
-
-lumberjack.main()
