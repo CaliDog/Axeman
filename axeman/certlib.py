@@ -4,6 +4,7 @@ import math
 import datetime
 from collections import OrderedDict
 
+import aiohttp
 from OpenSSL import crypto
 
 CTL_LISTS = 'https://www.gstatic.com/ct/log_list/log_list.json'
@@ -39,13 +40,15 @@ PreCertEntry = Struct(
     Terminated
 )
 
-async def retrieve_all_ctls(session):
+async def retrieve_all_ctls(session=None):
     async with session.get(CTL_LISTS) as response:
         ctl_lists = await response.json()
 
         logs = ctl_lists['logs']
 
         for log in logs:
+            if log['url'].endswith('/'):
+                log['url'] = log['url'][:-1]
             owner = _get_owner(log, ctl_lists['operators'])
             log['operated_by'] = owner
 

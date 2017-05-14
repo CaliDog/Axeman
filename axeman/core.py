@@ -1,22 +1,23 @@
+import argparse
 import asyncio
 
 import uvloop
-
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 import math
 import base64
-import sys
 import os
 import traceback
 import hashlib
 import aiohttp
 import aioprocessing
 import logging
+import locale
+locale.setlocale(locale.LC_ALL, 'en_US')
 
 from OpenSSL import crypto
 
-from lumberjack import certlib
+from . import certlib
 
 DOWNLOAD_CONCURRENCY = 50
 MAX_QUEUE_SIZE = 1000
@@ -24,7 +25,7 @@ MAX_QUEUE_SIZE = 1000
 async def download_worker(session, log_info, work_queue, download_queue):
     while not work_queue.empty():
         start, end = await work_queue.get()
-        logging.debug("Downloading {} {}-{}...".format(log_info['url'], start, end))
+        logging.debug("[{}] Queueing up blocks {}-{}...".format(log_info['url'], start, end))
 
         for x in range(3):
             try:
@@ -57,7 +58,7 @@ async def queue_monitor(log_info, work_queue, download_results_queue):
     total_blocks = math.ceil(total_size / log_info['block_size'])
 
     while True:
-        logging.info("Queue Status: DOWNLOAD:{0}/{1} ({2:.4f}%) PROCESSING:{3}".format(
+        logging.info("Queue Status: Processing Queue Size:{3} Downloaded blocks:{0}/{1} ({2:.4f}%)".format(
             total_blocks - len(work_queue._queue),
             total_blocks,
             ((total_blocks - len(work_queue._queue)) / total_blocks) * 100,
@@ -65,18 +66,18 @@ async def queue_monitor(log_info, work_queue, download_results_queue):
         ))
         await asyncio.sleep(2)
 
-async def retrieve_certificates(loop, start=0):
+async def retrieve_certificates(loop, url=None, output_directory='/tmp/', concurrency_count=DOWNLOAD_CONCURRENCY):
     async with aiohttp.ClientSession(loop=loop, conn_timeout=10) as session:
         ctl_logs = await certlib.retrieve_all_ctls(session)
 
-        for log in ctl_logs[start:]:
+        for log in ctl_logs:
+            if url and url not in log['url']:
+                continue
             work_queue = asyncio.Queue()
             download_results_queue = asyncio.Queue(maxsize=MAX_QUEUE_SIZE)
 
             logging.info("Downloading certificates for {}".format(log['description']))
             try:
-                if log['url'].endswith('/'):
-                    log['url'] = log['url'][:-1]
                 log_info = await certlib.retrieve_log_info(log, session)
             except (aiohttp.ClientConnectorError, aiohttp.ServerTimeoutError, aiohttp.ClientOSError, aiohttp.ClientResponseError) as e:
                 logging.error("Failed to connect to CTL! -> {} - skipping.".format(e))
@@ -86,10 +87,10 @@ async def retrieve_certificates(loop, start=0):
 
             download_tasks = asyncio.gather(*[
                 download_worker(session, log_info, work_queue, download_results_queue)
-                for _ in range(DOWNLOAD_CONCURRENCY)
+                for _ in range(concurrency_count)
             ])
 
-            processing_task    = asyncio.ensure_future(processing_coro(download_results_queue))
+            processing_task    = asyncio.ensure_future(processing_coro(download_results_queue, output_dir=output_directory))
             queue_monitor_task = asyncio.ensure_future(queue_monitor(log_info, work_queue, download_results_queue))
 
             asyncio.ensure_future(download_tasks)
@@ -106,9 +107,9 @@ async def retrieve_certificates(loop, start=0):
 
             logging.info("Finished downloading and processing {}".format(log_info['url']))
 
-async def processing_coro(download_results_queue):
+async def processing_coro(download_results_queue, output_dir="/tmp"):
     logging.info("Starting processing coro and process pool")
-    process_pool = aioprocessing.AioPool()
+    process_pool = aioprocessing.AioPool(initargs=(output_dir,))
 
     done = False
 
@@ -123,11 +124,11 @@ async def processing_coro(download_results_queue):
                 done = True
                 break
 
-        logging.info("Got a chunk of {}. Mapping into process pool".format(process_pool.pool_workers))
+        logging.debug("Got a chunk of {}. Mapping into process pool".format(process_pool.pool_workers))
 
         await process_pool.coro_map(process_worker, entries_iter)
 
-        logging.info("Done mapping! Got results")
+        logging.debug("Done mapping! Got results")
 
         if done:
             break
@@ -136,10 +137,9 @@ async def processing_coro(download_results_queue):
 
     await process_pool.coro_join()
 
-def process_worker(result_info):
+def process_worker(result_info, output_dir="/tmp"):
     try:
-
-        csv_storage = '/tmp/certificates/{}'.format(result_info['log_info']['url'].replace('/', '_'))
+        csv_storage = '{}/certificates/{}'.format(output_dir, result_info['log_info']['url'].replace('/', '_'))
 
         csv_file = "{}/{}-{}.csv".format(csv_storage, result_info['start'], result_info['end'])
 
@@ -206,21 +206,64 @@ def process_worker(result_info):
 
     return True
 
+async def get_certs_and_print():
+    with aiohttp.ClientSession(conn_timeout=5) as session:
+        ctls = await certlib.retrieve_all_ctls(session)
+        print("Found {} CTLs...".format(len(ctls)))
+        for log in ctls:
+            try:
+                log_info = await certlib.retrieve_log_info(log, session)
+            except:
+                continue
+
+            print(log['description'])
+            print("    \- URL:            {}".format(log['url']))
+            print("    \- Owner:          {}".format(log_info['operated_by']))
+            print("    \- Cert Count:     {}".format(locale.format("%d", log_info['tree_size']-1, grouping=True)))
+            print("    \- Max Block Size: {}\n".format(log_info['block_size']))
+
 def main():
     loop = asyncio.get_event_loop()
 
-    handlers = [logging.FileHandler('/tmp/lumberjack.log'), logging.StreamHandler()]
+    parser = argparse.ArgumentParser(description='Pull down certificate transparency list information')
 
-    logging.basicConfig(format='[%(levelname)s:%(name)s] %(asctime)s - %(message)s', level=logging.DEBUG, handlers=handlers)
+    parser.add_argument('-f', dest='log_file', action='store', default='/tmp/axeman.log',
+                        help='location for the axeman log file')
+
+    parser.add_argument('-s', dest='start_offset', action='store', default=0,
+                        help='Skip N number of lists before starting')
+
+    parser.add_argument('-l', dest="list_mode", action="store_true", help="List all available certificate lists")
+
+    parser.add_argument('-u', dest="ctl_url", action="store", default=None, help="Retrieve this CTL only")
+
+    parser.add_argument('-o', dest="output_dir", action="store", default="/tmp", help="The output directory to store certificates in")
+
+    parser.add_argument('-v', dest="verbose", action="store_true", help="Print out verbose/debug info")
+
+    parser.add_argument('-c', dest='concurrency_count', action='store', default=50, help="The number of concurrent downloads to run at a time")
+
+    args = parser.parse_args()
+
+    if args.list_mode:
+        loop.run_until_complete(get_certs_and_print())
+        return
+
+    handlers = [logging.FileHandler(args.log_file), logging.StreamHandler()]
+
+    if args.verbose:
+        logging.basicConfig(format='[%(levelname)s:%(name)s] %(asctime)s - %(message)s', level=logging.DEBUG, handlers=handlers)
+    else:
+        logging.basicConfig(format='[%(levelname)s:%(name)s] %(asctime)s - %(message)s', level=logging.INFO, handlers=handlers)
+
+
 
     logging.info("Starting...")
 
-    start = 0
-
-    if len(sys.argv) > 1:
-        start = int(sys.argv[1])
-
-    loop.run_until_complete(retrieve_certificates(loop, start))
+    if args.ctl_url:
+        loop.run_until_complete(retrieve_certificates(loop, url=args.ctl_url, concurrency_count=args.concurrency_count))
+    else:
+        loop.run_until_complete(retrieve_certificates(loop, concurrency_count=args.concurrency_count))
 
 if __name__ == "__main__":
     main()
