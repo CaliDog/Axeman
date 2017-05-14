@@ -3,3 +3,4 @@ uvloop
 aiohttp
 aioprocessing
 PyOpenSSL
+construct

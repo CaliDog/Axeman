@@ -13,7 +13,11 @@ import aiohttp
 import aioprocessing
 import logging
 import locale
-locale.setlocale(locale.LC_ALL, 'en_US')
+
+try:
+    locale.setlocale(locale.LC_ALL, 'en_US')
+except:
+    pass
 
 from OpenSSL import crypto
 
