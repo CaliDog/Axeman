@@ -1,9 +1,11 @@
 import argparse
 import asyncio
+from collections import deque
 
 import uvloop
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
+import sys
 import math
 import base64
 import os
@@ -21,28 +23,32 @@ except:
 
 from OpenSSL import crypto
 
-from . import certlib
+import certlib
 
 DOWNLOAD_CONCURRENCY = 50
 MAX_QUEUE_SIZE = 1000
 
-async def download_worker(session, log_info, work_queue, download_queue):
-    while not work_queue.empty():
-        start, end = await work_queue.get()
+async def download_worker(session, log_info, work_deque, download_queue):
+    while True:
+        try:
+            start, end = work_deque.popleft()
+        except IndexError:
+            return
+
         logging.debug("[{}] Queueing up blocks {}-{}...".format(log_info['url'], start, end))
 
         for x in range(3):
             try:
                 async with session.get(certlib.DOWNLOAD.format(log_info['url'], start, end)) as response:
                     entry_list = await response.json()
+                    logging.debug("[{}] Retrieved blocks {}-{}...".format(log_info['url'], start, end))
                     break
             except Exception as e:
                 logging.error("Exception getting block {}-{}! {}".format(start, end, e))
-        else:  # Notorious for else D:
+        else:  # Notorious for else, if we didn't encounter a break our request failed 3 times D:
             with open('/tmp/fails.csv', 'a') as f:
                 f.write(",".join([log_info['url'], str(start), str(end)]))
-
-            continue
+            return
 
         for index, entry in zip(range(start, end + 1), entry_list['entries']):
             entry['cert_index'] = index
@@ -54,30 +60,29 @@ async def download_worker(session, log_info, work_queue, download_queue):
             "end": end
         })
 
-    # Cleanup sentinal
-    await download_queue.put(None)
-
-async def queue_monitor(log_info, work_queue, download_results_queue):
+async def queue_monitor(log_info, work_deque, download_results_queue):
     total_size = log_info['tree_size'] - 1
     total_blocks = math.ceil(total_size / log_info['block_size'])
 
     while True:
         logging.info("Queue Status: Processing Queue Size:{3} Downloaded blocks:{0}/{1} ({2:.4f}%)".format(
-            total_blocks - len(work_queue._queue),
+            total_blocks - len(work_deque),
             total_blocks,
-            ((total_blocks - len(work_queue._queue)) / total_blocks) * 100,
+            ((total_blocks - len(work_deque)) / total_blocks) * 100,
             len(download_results_queue._queue),
         ))
         await asyncio.sleep(2)
 
-async def retrieve_certificates(loop, url=None, output_directory='/tmp/', concurrency_count=DOWNLOAD_CONCURRENCY):
+async def retrieve_certificates(loop, url=None, ctl_offset=0, output_directory='/tmp/', concurrency_count=DOWNLOAD_CONCURRENCY):
     async with aiohttp.ClientSession(loop=loop, conn_timeout=10) as session:
         ctl_logs = await certlib.retrieve_all_ctls(session)
+
+        url = url.strip("'")
 
         for log in ctl_logs:
             if url and url not in log['url']:
                 continue
-            work_queue = asyncio.Queue()
+            work_deque = deque()
             download_results_queue = asyncio.Queue(maxsize=MAX_QUEUE_SIZE)
 
             logging.info("Downloading certificates for {}".format(log['description']))
@@ -87,19 +92,22 @@ async def retrieve_certificates(loop, url=None, output_directory='/tmp/', concur
                 logging.error("Failed to connect to CTL! -> {} - skipping.".format(e))
                 continue
 
-            await certlib.populate_work_queue(work_queue, log_info)
+            await certlib.populate_work(work_deque, log_info, start=ctl_offset)
 
             download_tasks = asyncio.gather(*[
-                download_worker(session, log_info, work_queue, download_results_queue)
+                download_worker(session, log_info, work_deque, download_results_queue)
                 for _ in range(concurrency_count)
             ])
 
             processing_task    = asyncio.ensure_future(processing_coro(download_results_queue, output_dir=output_directory))
-            queue_monitor_task = asyncio.ensure_future(queue_monitor(log_info, work_queue, download_results_queue))
+            queue_monitor_task = asyncio.ensure_future(queue_monitor(log_info, work_deque, download_results_queue))
 
             asyncio.ensure_future(download_tasks)
 
             await download_tasks
+
+            await download_results_queue.put(None) # Downloads are done, processing can stop
+
             await processing_task
 
             queue_monitor_task.cancel()
@@ -130,6 +138,13 @@ async def processing_coro(download_results_queue, output_dir="/tmp"):
 
         logging.debug("Got a chunk of {}. Mapping into process pool".format(process_pool.pool_workers))
 
+
+        for entry in entries_iter:
+            csv_storage = '{}/certificates/{}'.format(output_dir, entry['log_info']['url'].replace('/', '_'))
+            if not os.path.exists(csv_storage):
+                print("[{}] Making dir...".format(os.getpid()))
+                os.makedirs(csv_storage)
+
         await process_pool.coro_map(process_worker, entries_iter)
 
         logging.debug("Done mapping! Got results")
@@ -142,6 +157,7 @@ async def processing_coro(download_results_queue, output_dir="/tmp"):
     await process_pool.coro_join()
 
 def process_worker(result_info, output_dir="/tmp"):
+    logging.debug("Worker {} starting...".format(os.getpid()))
     try:
         csv_storage = '{}/certificates/{}'.format(output_dir, result_info['log_info']['url'].replace('/', '_'))
 
@@ -149,9 +165,7 @@ def process_worker(result_info, output_dir="/tmp"):
 
         lines = []
 
-        if not os.path.exists(csv_storage):
-            os.makedirs(csv_storage)
-
+        print("[{}] Parsing...".format(os.getpid()))
         for entry in result_info['entries']:
             mtl = certlib.MerkleTreeHeader.parse(base64.b64decode(entry['leaf_input']))
 
@@ -199,8 +213,11 @@ def process_worker(result_info, output_dir="/tmp"):
                 ]) + "\n"
             )
 
+        print("[{}] Finished, writing CSV...".format(os.getpid()))
+
         with open(csv_file, 'w') as f:
             f.write("".join(lines))
+        print("[{}] CSV {} written!".format(os.getpid(), csv_file))
 
     except Exception as e:
         print("========= EXCEPTION =========")
@@ -241,6 +258,8 @@ def main():
 
     parser.add_argument('-u', dest="ctl_url", action="store", default=None, help="Retrieve this CTL only")
 
+    parser.add_argument('-z', dest="ctl_offset", action="store", default=0, help="The CTL offset to start at")
+
     parser.add_argument('-o', dest="output_dir", action="store", default="/tmp", help="The output directory to store certificates in")
 
     parser.add_argument('-v', dest="verbose", action="store_true", help="Print out verbose/debug info")
@@ -260,12 +279,10 @@ def main():
     else:
         logging.basicConfig(format='[%(levelname)s:%(name)s] %(asctime)s - %(message)s', level=logging.INFO, handlers=handlers)
 
-
-
     logging.info("Starting...")
 
     if args.ctl_url:
-        loop.run_until_complete(retrieve_certificates(loop, url=args.ctl_url, concurrency_count=args.concurrency_count))
+        loop.run_until_complete(retrieve_certificates(loop, url=args.ctl_url, ctl_offset=int(args.ctl_offset), concurrency_count=args.concurrency_count))
     else:
         loop.run_until_complete(retrieve_certificates(loop, concurrency_count=args.concurrency_count))
 

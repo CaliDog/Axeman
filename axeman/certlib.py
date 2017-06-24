@@ -4,7 +4,6 @@ import math
 import datetime
 from collections import OrderedDict
 
-import aiohttp
 from OpenSSL import crypto
 
 CTL_LISTS = 'https://www.gstatic.com/ct/log_list/log_list.json'
@@ -12,7 +11,6 @@ CTL_LISTS = 'https://www.gstatic.com/ct/log_list/log_list.json'
 CTL_INFO = "http://{}/ct/v1/get-sth"
 
 DOWNLOAD = "http://{}/ct/v1/get-entries?start={}&end={}"
-
 
 from construct import Struct, Byte, Int16ub, Int64ub, Enum, Bytes, Int24ub, this, GreedyBytes, GreedyRange, Terminated, Embedded
 
@@ -73,17 +71,18 @@ async def retrieve_log_info(log, session):
         info.update(log)
         return info
 
-async def populate_work_queue(work_queue, log_info):
+async def populate_work(work_deque, log_info, start=0):
     tree_size = log_info['tree_size']
     block_size = log_info['block_size']
 
     total_size = tree_size - 1
 
-    start = 0
-
     end = start + block_size
 
-    chunks = math.ceil(total_size / block_size)
+    if end > tree_size:
+        end = tree_size
+
+    chunks = math.ceil((total_size - start) / block_size)
 
     for _ in range(chunks):
         # Cap the end to the last record in the DB
@@ -93,7 +92,7 @@ async def populate_work_queue(work_queue, log_info):
         assert end >= start, "End {} is less than start {}!".format(end, start)
         assert end < tree_size, "End {} is less than tree_size {}".format(end, tree_size)
 
-        await work_queue.put((start, end))
+        work_deque.append((start, end))
 
         start += block_size
 
