@@ -23,7 +23,7 @@ except:
 
 from OpenSSL import crypto
 
-import certlib
+from . import certlib
 
 DOWNLOAD_CONCURRENCY = 50
 MAX_QUEUE_SIZE = 1000
@@ -77,7 +77,8 @@ async def retrieve_certificates(loop, url=None, ctl_offset=0, output_directory='
     async with aiohttp.ClientSession(loop=loop, conn_timeout=10) as session:
         ctl_logs = await certlib.retrieve_all_ctls(session)
 
-        url = url.strip("'")
+        if url:
+            url = url.strip("'")
 
         for log in ctl_logs:
             if url and url not in log['url']:
