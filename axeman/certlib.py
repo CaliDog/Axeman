@@ -84,6 +84,9 @@ async def populate_work(work_deque, log_info, start=0):
 
     chunks = math.ceil((total_size - start) / block_size)
 
+    if chunks == 0:
+        raise Exception("No work needed!")
+
     for _ in range(chunks):
         # Cap the end to the last record in the DB
         if end >= tree_size:

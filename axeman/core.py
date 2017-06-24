@@ -93,7 +93,11 @@ async def retrieve_certificates(loop, url=None, ctl_offset=0, output_directory='
                 logging.error("Failed to connect to CTL! -> {} - skipping.".format(e))
                 continue
 
-            await certlib.populate_work(work_deque, log_info, start=ctl_offset)
+            try:
+                await certlib.populate_work(work_deque, log_info, start=ctl_offset)
+            except Exception as e:
+                logging.error("Log needs no update - {}".format(e))
+                continue
 
             download_tasks = asyncio.gather(*[
                 download_worker(session, log_info, work_deque, download_results_queue)
