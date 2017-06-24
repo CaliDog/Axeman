@@ -150,7 +150,8 @@ async def processing_coro(download_results_queue, output_dir="/tmp"):
                 print("[{}] Making dir...".format(os.getpid()))
                 os.makedirs(csv_storage)
 
-        await process_pool.coro_map(process_worker, entries_iter)
+        if len(entries_iter) > 0:
+            await process_pool.coro_map(process_worker, entries_iter)
 
         logging.debug("Done mapping! Got results")
 
@@ -163,6 +164,8 @@ async def processing_coro(download_results_queue, output_dir="/tmp"):
 
 def process_worker(result_info, output_dir="/tmp"):
     logging.debug("Worker {} starting...".format(os.getpid()))
+    if not result_info:
+        return
     try:
         csv_storage = '{}/certificates/{}'.format(output_dir, result_info['log_info']['url'].replace('/', '_'))
 
