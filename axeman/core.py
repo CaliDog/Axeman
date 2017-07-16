@@ -272,7 +272,7 @@ def main():
 
     parser.add_argument('-v', dest="verbose", action="store_true", help="Print out verbose/debug info")
 
-    parser.add_argument('-c', dest='concurrency_count', action='store', default=50, help="The number of concurrent downloads to run at a time")
+    parser.add_argument('-c', dest='concurrency_count', action='store', default=50, type=int, help="The number of concurrent downloads to run at a time")
 
     args = parser.parse_args()
 
