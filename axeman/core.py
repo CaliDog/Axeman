@@ -1,11 +1,13 @@
+#!/usr/bin/env python
 import argparse
 import asyncio
+import sqlite3
 from collections import deque
 
 import uvloop
+
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
-import sys
 import math
 import base64
 import os
@@ -23,10 +25,23 @@ except:
 
 from OpenSSL import crypto
 
-from . import certlib
+from axeman import certlib
 
 DOWNLOAD_CONCURRENCY = 50
 MAX_QUEUE_SIZE = 1000
+
+
+class sql:
+    def __init__(self, filepath):
+        self.filepath = filepath
+
+    def __enter__(self):
+        self.con = sqlite3.connect(self.filepath)
+        return self.con
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.con.close()
+
 
 async def download_worker(session, log_info, work_deque, download_queue):
     while True:
@@ -59,6 +74,7 @@ async def download_worker(session, log_info, work_deque, download_queue):
             "start": start,
             "end": end
         })
+
 
 async def queue_monitor(log_info, work_deque, download_results_queue):
     total_size = log_info['tree_size'] - 1
@@ -110,9 +126,7 @@ async def retrieve_certificates(loop, url=None, ctl_offset=0, output_directory='
             asyncio.ensure_future(download_tasks)
 
             await download_tasks
-
-            await download_results_queue.put(None) # Downloads are done, processing can stop
-
+            await download_results_queue.put(None)  # Downloads are done, processing can stop
             await processing_task
 
             queue_monitor_task.cancel()
@@ -142,7 +156,6 @@ async def processing_coro(download_results_queue, output_dir="/tmp"):
                 break
 
         logging.debug("Got a chunk of {}. Mapping into process pool".format(process_pool.pool_workers))
-
 
         for entry in entries_iter:
             csv_storage = '{}/certificates/{}'.format(output_dir, entry['log_info']['url'].replace('/', '_'))
@@ -209,8 +222,19 @@ def process_worker(result_info, output_dir="/tmp"):
             chain_hash = hashlib.sha256("".join([x['as_der'] for x in cert_data['chain']]).encode('ascii')).hexdigest()
 
             # header = "url, cert_index, chain_hash, cert_der, all_domains, not_before, not_after"
+            # lines.append(
+            #     ",".join([
+            #         result_info['log_info']['url'],
+            #         str(entry['cert_index']),
+            #         chain_hash,
+            #         cert_data['leaf_cert']['as_der'],
+            #         ' '.join(cert_data['leaf_cert']['all_domains']),
+            #         str(cert_data['leaf_cert']['not_before']),
+            #         str(cert_data['leaf_cert']['not_after'])
+            #     ]) + "\n"
+            # )
             lines.append(
-                ",".join([
+                (
                     result_info['log_info']['url'],
                     str(entry['cert_index']),
                     chain_hash,
@@ -218,14 +242,20 @@ def process_worker(result_info, output_dir="/tmp"):
                     ' '.join(cert_data['leaf_cert']['all_domains']),
                     str(cert_data['leaf_cert']['not_before']),
                     str(cert_data['leaf_cert']['not_after'])
-                ]) + "\n"
+                )
             )
 
-        print("[{}] Finished, writing CSV...".format(os.getpid()))
+        print("[{}] Finished, writing to DB...".format(os.getpid()))
 
-        with open(csv_file, 'w') as f:
-            f.write("".join(lines))
-        print("[{}] CSV {} written!".format(os.getpid(), csv_file))
+        with sql("output.db") as c:
+            c.executemany("INSERT INTO output(url, cert_index, chain_hash, cert_der, all_domains, not_before, not_after) VALUES (?,?,?,?,?,?,?)", lines)
+            c.commit()
+
+        print("[{}] Written to DB!".format(os.getpid()))
+
+        # with open(csv_file, 'w') as f:
+        #     f.write("".join(lines))
+        # print("[{}] DB {} written!".format(os.getpid(), csv_file))
 
     except Exception as e:
         print("========= EXCEPTION =========")
@@ -234,6 +264,7 @@ def process_worker(result_info, output_dir="/tmp"):
         print("=============================")
 
     return True
+
 
 async def get_certs_and_print():
     with aiohttp.ClientSession(conn_timeout=5) as session:
@@ -248,8 +279,9 @@ async def get_certs_and_print():
             print(log['description'])
             print("    \- URL:            {}".format(log['url']))
             print("    \- Owner:          {}".format(log_info['operated_by']))
-            print("    \- Cert Count:     {}".format(locale.format("%d", log_info['tree_size']-1, grouping=True)))
+            print("    \- Cert Count:     {}".format(locale.format("%d", log_info['tree_size'] - 1, grouping=True)))
             print("    \- Max Block Size: {}\n".format(log_info['block_size']))
+
 
 def main():
     loop = asyncio.get_event_loop()
@@ -274,6 +306,8 @@ def main():
 
     parser.add_argument('-c', dest='concurrency_count', action='store', default=50, type=int, help="The number of concurrent downloads to run at a time")
 
+    parser.add_argument('-d', dest='database_file', action='store', default='output.db', help="Location for the sqlite output file")
+
     args = parser.parse_args()
 
     if args.list_mode:
@@ -288,6 +322,11 @@ def main():
         logging.basicConfig(format='[%(levelname)s:%(name)s] %(asctime)s - %(message)s', level=logging.INFO, handlers=handlers)
 
     logging.info("Starting...")
+
+    with sql("output.db") as c:
+        c.execute("DROP TABLE IF EXISTS output")
+        c.execute("CREATE TABLE output (url string, cert_index string, chain_hash string, cert_der string, all_domains string, not_before timestamp, not_after timestamp)")
+        c.commit()
 
     if args.ctl_url:
         loop.run_until_complete(retrieve_certificates(loop, url=args.ctl_url, ctl_offset=int(args.ctl_offset), concurrency_count=args.concurrency_count))
