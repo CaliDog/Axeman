@@ -12,14 +12,15 @@ CTL_INFO = "http://{}/ct/v1/get-sth"
 
 DOWNLOAD = "http://{}/ct/v1/get-entries?start={}&end={}"
 
-from construct import Struct, Byte, Int16ub, Int64ub, Enum, Bytes, Int24ub, this, GreedyBytes, GreedyRange, Terminated, Embedded
+from construct import Struct, Byte, Int16ub, Int64ub, Enum, Bytes, Int24ub, this, GreedyBytes, GreedyRange, Terminated, \
+    Embedded
 
 MerkleTreeHeader = Struct(
-    "Version"         / Byte,
-    "MerkleLeafType"  / Byte,
-    "Timestamp"       / Int64ub,
-    "LogEntryType"    / Enum(Int16ub, X509LogEntryType=0, PrecertLogEntryType=1),
-    "Entry"           / GreedyBytes
+    "Version" / Byte,
+    "MerkleLeafType" / Byte,
+    "Timestamp" / Int64ub,
+    "LogEntryType" / Enum(Int16ub, X509LogEntryType=0, PrecertLogEntryType=1),
+    "Entry" / GreedyBytes
 )
 
 Certificate = Struct(
@@ -38,6 +39,7 @@ PreCertEntry = Struct(
     Terminated
 )
 
+
 async def retrieve_all_ctls(session=None):
     async with session.get(CTL_LISTS) as response:
         ctl_lists = await response.json()
@@ -52,15 +54,18 @@ async def retrieve_all_ctls(session=None):
 
         return logs
 
+
 def _get_owner(log, owners):
     owner_id = log['operated_by'][0]
     owner = next(x for x in owners if x['id'] == owner_id)
     return owner['name']
 
+
 async def get_max_block_size(log, session):
     async with session.get(DOWNLOAD.format(log['url'], 0, 10000)) as response:
         entries = await response.json()
         return len(entries['entries'])
+
 
 async def retrieve_log_info(log, session):
     block_size = await get_max_block_size(log, session)
@@ -70,6 +75,7 @@ async def retrieve_log_info(log, session):
         info['block_size'] = block_size
         info.update(log)
         return info
+
 
 async def populate_work(work_deque, log_info, start=0):
     tree_size = log_info['tree_size']
@@ -101,6 +107,7 @@ async def populate_work(work_deque, log_info, start=0):
 
         end = start + block_size + 1
 
+
 def add_all_domains(cert_data):
     all_domains = []
 
@@ -118,6 +125,7 @@ def add_all_domains(cert_data):
     cert_data['leaf_cert']['all_domains'] = list(OrderedDict.fromkeys(all_domains))
 
     return cert_data
+
 
 def dump_cert(certificate):
     subject = certificate.get_subject()
@@ -147,6 +155,7 @@ def dump_cert(certificate):
         "not_after": not_after,
         "as_der": base64.b64encode(crypto.dump_certificate(crypto.FILETYPE_ASN1, certificate)).decode('utf-8')
     }
+
 
 def dump_extensions(certificate):
     extensions = {}

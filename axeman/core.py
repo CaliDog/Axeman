@@ -1,11 +1,13 @@
+#!/usr/bin/env python
 import argparse
 import asyncio
+import sqlite3
 from collections import deque
 
 import uvloop
+
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
-import sys
 import math
 import base64
 import os
@@ -23,10 +25,23 @@ except:
 
 from OpenSSL import crypto
 
-from . import certlib
+from axeman import certlib
 
 DOWNLOAD_CONCURRENCY = 50
 MAX_QUEUE_SIZE = 1000
+
+
+class sql:
+    def __init__(self, filepath):
+        self.filepath = filepath
+
+    def __enter__(self):
+        self.con = sqlite3.connect(self.filepath)
+        return self.con
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.con.close()
+
 
 async def download_worker(session, log_info, work_deque, download_queue):
     while True:
@@ -60,6 +75,7 @@ async def download_worker(session, log_info, work_deque, download_queue):
             "end": end
         })
 
+
 async def queue_monitor(log_info, work_deque, download_results_queue):
     total_size = log_info['tree_size'] - 1
     total_blocks = math.ceil(total_size / log_info['block_size'])
@@ -73,7 +89,7 @@ async def queue_monitor(log_info, work_deque, download_results_queue):
         ))
         await asyncio.sleep(2)
 
-async def retrieve_certificates(loop, url=None, ctl_offset=0, output_directory='/tmp/', concurrency_count=DOWNLOAD_CONCURRENCY):
+async def retrieve_certificates(loop, url=None, ctl_offset=0, db_file='~/share/output.db', concurrency_count=DOWNLOAD_CONCURRENCY):
     async with aiohttp.ClientSession(loop=loop, conn_timeout=10) as session:
         ctl_logs = await certlib.retrieve_all_ctls(session)
 
@@ -104,29 +120,24 @@ async def retrieve_certificates(loop, url=None, ctl_offset=0, output_directory='
                 for _ in range(concurrency_count)
             ])
 
-            processing_task    = asyncio.ensure_future(processing_coro(download_results_queue, output_dir=output_directory))
+            processing_task    = asyncio.ensure_future(processing_coro(download_results_queue, db_file=db_file))
             queue_monitor_task = asyncio.ensure_future(queue_monitor(log_info, work_deque, download_results_queue))
 
             asyncio.ensure_future(download_tasks)
 
             await download_tasks
-
-            await download_results_queue.put(None) # Downloads are done, processing can stop
-
+            await download_results_queue.put(None)  # Downloads are done, processing can stop
             await processing_task
 
             queue_monitor_task.cancel()
 
-            logging.info("Completed {}, stored at {}!".format(
-                log_info['description'],
-                '/tmp/{}.csv'.format(log_info['url'].replace('/', '_'))
-            ))
+            logging.info("Completed {}".format(log_info['description']))
 
             logging.info("Finished downloading and processing {}".format(log_info['url']))
 
-async def processing_coro(download_results_queue, output_dir="/tmp"):
+async def processing_coro(download_results_queue, db_file="~/share/output.db"):
     logging.info("Starting processing coro and process pool")
-    process_pool = aioprocessing.AioPool(initargs=(output_dir,))
+    process_pool = aioprocessing.AioPool(initargs=(db_file,))
 
     done = False
 
@@ -143,13 +154,6 @@ async def processing_coro(download_results_queue, output_dir="/tmp"):
 
         logging.debug("Got a chunk of {}. Mapping into process pool".format(process_pool.pool_workers))
 
-
-        for entry in entries_iter:
-            csv_storage = '{}/certificates/{}'.format(output_dir, entry['log_info']['url'].replace('/', '_'))
-            if not os.path.exists(csv_storage):
-                print("[{}] Making dir...".format(os.getpid()))
-                os.makedirs(csv_storage)
-
         if len(entries_iter) > 0:
             await process_pool.coro_map(process_worker, entries_iter)
 
@@ -162,15 +166,11 @@ async def processing_coro(download_results_queue, output_dir="/tmp"):
 
     await process_pool.coro_join()
 
-def process_worker(result_info, output_dir="/tmp"):
+def process_worker(result_info, db_file='~/share/output.db'):
     logging.debug("Worker {} starting...".format(os.getpid()))
     if not result_info:
         return
     try:
-        csv_storage = '{}/certificates/{}'.format(output_dir, result_info['log_info']['url'].replace('/', '_'))
-
-        csv_file = "{}/{}-{}.csv".format(csv_storage, result_info['start'], result_info['end'])
-
         lines = []
 
         print("[{}] Parsing...".format(os.getpid()))
@@ -208,9 +208,8 @@ def process_worker(result_info, output_dir="/tmp"):
 
             chain_hash = hashlib.sha256("".join([x['as_der'] for x in cert_data['chain']]).encode('ascii')).hexdigest()
 
-            # header = "url, cert_index, chain_hash, cert_der, all_domains, not_before, not_after"
             lines.append(
-                ",".join([
+                (
                     result_info['log_info']['url'],
                     str(entry['cert_index']),
                     chain_hash,
@@ -218,14 +217,16 @@ def process_worker(result_info, output_dir="/tmp"):
                     ' '.join(cert_data['leaf_cert']['all_domains']),
                     str(cert_data['leaf_cert']['not_before']),
                     str(cert_data['leaf_cert']['not_after'])
-                ]) + "\n"
+                )
             )
 
-        print("[{}] Finished, writing CSV...".format(os.getpid()))
+        print("[{}] Finished, writing to DB...".format(os.getpid()))
 
-        with open(csv_file, 'w') as f:
-            f.write("".join(lines))
-        print("[{}] CSV {} written!".format(os.getpid(), csv_file))
+        with sql(db_file) as c:
+            c.executemany("INSERT INTO output(url, cert_index, chain_hash, cert_der, all_domains, not_before, not_after) VALUES (?,?,?,?,?,?,?)", lines)
+            c.commit()
+
+        print("[{}] Written to DB!".format(os.getpid()))
 
     except Exception as e:
         print("========= EXCEPTION =========")
@@ -234,6 +235,7 @@ def process_worker(result_info, output_dir="/tmp"):
         print("=============================")
 
     return True
+
 
 async def get_certs_and_print():
     with aiohttp.ClientSession(conn_timeout=5) as session:
@@ -248,8 +250,9 @@ async def get_certs_and_print():
             print(log['description'])
             print("    \- URL:            {}".format(log['url']))
             print("    \- Owner:          {}".format(log_info['operated_by']))
-            print("    \- Cert Count:     {}".format(locale.format("%d", log_info['tree_size']-1, grouping=True)))
+            print("    \- Cert Count:     {}".format(locale.format("%d", log_info['tree_size'] - 1, grouping=True)))
             print("    \- Max Block Size: {}\n".format(log_info['block_size']))
+
 
 def main():
     loop = asyncio.get_event_loop()
@@ -274,6 +277,8 @@ def main():
 
     parser.add_argument('-c', dest='concurrency_count', action='store', default=50, type=int, help="The number of concurrent downloads to run at a time")
 
+    parser.add_argument('-d', dest='db_file', action='store', default='~/share/output.db', help="Location for the sqlite output file")
+
     args = parser.parse_args()
 
     if args.list_mode:
@@ -289,10 +294,15 @@ def main():
 
     logging.info("Starting...")
 
+    with sql(args.db_file) as c:
+        c.execute("DROP TABLE IF EXISTS output")
+        c.execute("CREATE TABLE output (url string, cert_index string, chain_hash string, cert_der string, all_domains string, not_before timestamp, not_after timestamp)")
+        c.commit()
+
     if args.ctl_url:
-        loop.run_until_complete(retrieve_certificates(loop, url=args.ctl_url, ctl_offset=int(args.ctl_offset), concurrency_count=args.concurrency_count))
+        loop.run_until_complete(retrieve_certificates(loop, url=args.ctl_url, ctl_offset=int(args.ctl_offset), db_file=args.db_file, concurrency_count=args.concurrency_count))
     else:
-        loop.run_until_complete(retrieve_certificates(loop, concurrency_count=args.concurrency_count))
+        loop.run_until_complete(retrieve_certificates(loop, db_file=args.db_file, concurrency_count=args.concurrency_count))
 
 if __name__ == "__main__":
     main()
