@@ -89,7 +89,7 @@ async def queue_monitor(log_info, work_deque, download_results_queue):
         ))
         await asyncio.sleep(2)
 
-async def retrieve_certificates(loop, url=None, ctl_offset=0, output_directory='/tmp/', concurrency_count=DOWNLOAD_CONCURRENCY):
+async def retrieve_certificates(loop, url=None, ctl_offset=0, db_file='~/share/output.db', concurrency_count=DOWNLOAD_CONCURRENCY):
     async with aiohttp.ClientSession(loop=loop, conn_timeout=10) as session:
         ctl_logs = await certlib.retrieve_all_ctls(session)
 
@@ -120,7 +120,7 @@ async def retrieve_certificates(loop, url=None, ctl_offset=0, output_directory='
                 for _ in range(concurrency_count)
             ])
 
-            processing_task    = asyncio.ensure_future(processing_coro(download_results_queue, output_dir=output_directory))
+            processing_task    = asyncio.ensure_future(processing_coro(download_results_queue, db_file=db_file))
             queue_monitor_task = asyncio.ensure_future(queue_monitor(log_info, work_deque, download_results_queue))
 
             asyncio.ensure_future(download_tasks)
@@ -131,16 +131,13 @@ async def retrieve_certificates(loop, url=None, ctl_offset=0, output_directory='
 
             queue_monitor_task.cancel()
 
-            logging.info("Completed {}, stored at {}!".format(
-                log_info['description'],
-                '/tmp/{}.csv'.format(log_info['url'].replace('/', '_'))
-            ))
+            logging.info("Completed {}".format(log_info['description']))
 
             logging.info("Finished downloading and processing {}".format(log_info['url']))
 
-async def processing_coro(download_results_queue, output_dir="/tmp"):
+async def processing_coro(download_results_queue, db_file="~/share/output.db"):
     logging.info("Starting processing coro and process pool")
-    process_pool = aioprocessing.AioPool(initargs=(output_dir,))
+    process_pool = aioprocessing.AioPool(initargs=(db_file,))
 
     done = False
 
@@ -157,12 +154,6 @@ async def processing_coro(download_results_queue, output_dir="/tmp"):
 
         logging.debug("Got a chunk of {}. Mapping into process pool".format(process_pool.pool_workers))
 
-        for entry in entries_iter:
-            csv_storage = '{}/certificates/{}'.format(output_dir, entry['log_info']['url'].replace('/', '_'))
-            if not os.path.exists(csv_storage):
-                print("[{}] Making dir...".format(os.getpid()))
-                os.makedirs(csv_storage)
-
         if len(entries_iter) > 0:
             await process_pool.coro_map(process_worker, entries_iter)
 
@@ -175,15 +166,11 @@ async def processing_coro(download_results_queue, output_dir="/tmp"):
 
     await process_pool.coro_join()
 
-def process_worker(result_info, output_dir="/tmp"):
+def process_worker(result_info, db_file='~/share/output.db'):
     logging.debug("Worker {} starting...".format(os.getpid()))
     if not result_info:
         return
     try:
-        csv_storage = '{}/certificates/{}'.format(output_dir, result_info['log_info']['url'].replace('/', '_'))
-
-        csv_file = "{}/{}-{}.csv".format(csv_storage, result_info['start'], result_info['end'])
-
         lines = []
 
         print("[{}] Parsing...".format(os.getpid()))
@@ -221,18 +208,6 @@ def process_worker(result_info, output_dir="/tmp"):
 
             chain_hash = hashlib.sha256("".join([x['as_der'] for x in cert_data['chain']]).encode('ascii')).hexdigest()
 
-            # header = "url, cert_index, chain_hash, cert_der, all_domains, not_before, not_after"
-            # lines.append(
-            #     ",".join([
-            #         result_info['log_info']['url'],
-            #         str(entry['cert_index']),
-            #         chain_hash,
-            #         cert_data['leaf_cert']['as_der'],
-            #         ' '.join(cert_data['leaf_cert']['all_domains']),
-            #         str(cert_data['leaf_cert']['not_before']),
-            #         str(cert_data['leaf_cert']['not_after'])
-            #     ]) + "\n"
-            # )
             lines.append(
                 (
                     result_info['log_info']['url'],
@@ -247,15 +222,11 @@ def process_worker(result_info, output_dir="/tmp"):
 
         print("[{}] Finished, writing to DB...".format(os.getpid()))
 
-        with sql("output.db") as c:
+        with sql(db_file) as c:
             c.executemany("INSERT INTO output(url, cert_index, chain_hash, cert_der, all_domains, not_before, not_after) VALUES (?,?,?,?,?,?,?)", lines)
             c.commit()
 
         print("[{}] Written to DB!".format(os.getpid()))
-
-        # with open(csv_file, 'w') as f:
-        #     f.write("".join(lines))
-        # print("[{}] DB {} written!".format(os.getpid(), csv_file))
 
     except Exception as e:
         print("========= EXCEPTION =========")
@@ -306,7 +277,7 @@ def main():
 
     parser.add_argument('-c', dest='concurrency_count', action='store', default=50, type=int, help="The number of concurrent downloads to run at a time")
 
-    parser.add_argument('-d', dest='database_file', action='store', default='output.db', help="Location for the sqlite output file")
+    parser.add_argument('-d', dest='db_file', action='store', default='~/share/output.db', help="Location for the sqlite output file")
 
     args = parser.parse_args()
 
@@ -323,15 +294,15 @@ def main():
 
     logging.info("Starting...")
 
-    with sql("output.db") as c:
+    with sql(args.db_file) as c:
         c.execute("DROP TABLE IF EXISTS output")
         c.execute("CREATE TABLE output (url string, cert_index string, chain_hash string, cert_der string, all_domains string, not_before timestamp, not_after timestamp)")
         c.commit()
 
     if args.ctl_url:
-        loop.run_until_complete(retrieve_certificates(loop, url=args.ctl_url, ctl_offset=int(args.ctl_offset), concurrency_count=args.concurrency_count))
+        loop.run_until_complete(retrieve_certificates(loop, url=args.ctl_url, ctl_offset=int(args.ctl_offset), db_file=args.db_file, concurrency_count=args.concurrency_count))
     else:
-        loop.run_until_complete(retrieve_certificates(loop, concurrency_count=args.concurrency_count))
+        loop.run_until_complete(retrieve_certificates(loop, db_file=args.db_file, concurrency_count=args.concurrency_count))
 
 if __name__ == "__main__":
     main()
