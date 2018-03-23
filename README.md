@@ -13,6 +13,11 @@ Installation should be super straight forward, but you need a newer version of p
 ```
 pip3 install axeman
 ```
+## Snap Installation
+
+```
+sudo snap install axeman
+```
 
 ## Usage
 
