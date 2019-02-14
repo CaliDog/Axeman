@@ -236,7 +236,7 @@ def process_worker(result_info, output_dir="/tmp"):
     return True
 
 async def get_certs_and_print():
-    with aiohttp.ClientSession(conn_timeout=5) as session:
+    async with aiohttp.ClientSession(conn_timeout=5) as session:
         ctls = await certlib.retrieve_all_ctls(session)
         print("Found {} CTLs...".format(len(ctls)))
         for log in ctls:
