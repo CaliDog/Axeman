@@ -223,7 +223,7 @@ def process_worker(result_info, output_dir="/tmp"):
 
         print("[{}] Finished, writing CSV...".format(os.getpid()))
 
-        with open(csv_file, 'w') as f:
+        with open(csv_file, 'w', encoding='utf8') as f:
             f.write("".join(lines))
         print("[{}] CSV {} written!".format(os.getpid(), csv_file))
 
