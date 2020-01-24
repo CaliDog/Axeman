@@ -149,6 +149,7 @@ async def processing_coro(download_results_queue, output_dir="/tmp"):
             if not os.path.exists(csv_storage):
                 print("[{}] Making dir...".format(os.getpid()))
                 os.makedirs(csv_storage)
+            entry['log_dir']=csv_storage
 
         if len(entries_iter) > 0:
             await process_pool.coro_map(process_worker, entries_iter)
@@ -162,13 +163,12 @@ async def processing_coro(download_results_queue, output_dir="/tmp"):
 
     await process_pool.coro_join()
 
-def process_worker(result_info, output_dir="/tmp"):
+def process_worker(result_info):
     logging.debug("Worker {} starting...".format(os.getpid()))
     if not result_info:
         return
     try:
-        csv_storage = '{}/certificates/{}'.format(output_dir, result_info['log_info']['url'].replace('/', '_'))
-
+        csv_storage = result_info['log_dir']
         csv_file = "{}/{}-{}.csv".format(csv_storage, result_info['start'], result_info['end'])
 
         lines = []
@@ -290,9 +290,9 @@ def main():
     logging.info("Starting...")
 
     if args.ctl_url:
-        loop.run_until_complete(retrieve_certificates(loop, url=args.ctl_url, ctl_offset=int(args.ctl_offset), concurrency_count=args.concurrency_count))
+        loop.run_until_complete(retrieve_certificates(loop, url=args.ctl_url, ctl_offset=int(args.ctl_offset), concurrency_count=args.concurrency_count, output_directory=args.output_dir))
     else:
-        loop.run_until_complete(retrieve_certificates(loop, concurrency_count=args.concurrency_count))
+        loop.run_until_complete(retrieve_certificates(loop, concurrency_count=args.concurrency_count, output_directory=args.output_dir))
 
 if __name__ == "__main__":
     main()
