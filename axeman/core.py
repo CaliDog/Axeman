@@ -41,11 +41,19 @@ async def download_worker(session, log_info, work_deque, download_queue):
         for x in range(30):
             try:
                 async with session.get(certlib.DOWNLOAD.format(log_info['url'], start, end)) as response:
+                    if response.status == 429:
+                        logging.info("got http status {}-{}".format(x, response.status))
+                        time.sleep(min(x + 1, 10))
+                        continue
                     if response.content_type != 'application/json':
                         text = await response.text()
-                        logging.error("got response {}-{}".format(response.content_type, text))
+                        logging.error("got response {}-{}-{}".format(x, response.content_type, text))
                     entry_list = await response.json()
                     logging.debug("[{}] Retrieved blocks {}-{}...".format(log_info['url'], start, end))
+                    if entry_list.get('error_code', '') == 'rate_limited':
+                        logging.info("{}-{}".format(x, entry_list))
+                        time.sleep(min(x + 1, 10))
+                        continue
                     break
             except Exception as e:
                 logging.error("Exception getting block {}-{}! {}".format(start, end, e))
