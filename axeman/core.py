@@ -25,7 +25,7 @@ except:
 
 from OpenSSL import crypto
 
-from . import certlib
+import certlib
 
 DOWNLOAD_CONCURRENCY = 50
 MAX_QUEUE_SIZE = 1000
@@ -88,7 +88,7 @@ async def queue_monitor(log_info, work_deque, download_results_queue):
         await asyncio.sleep(2)
 
 async def retrieve_certificates(loop, url=None, ctl_offset=0, output_directory='/tmp/', concurrency_count=DOWNLOAD_CONCURRENCY):
-    async with aiohttp.ClientSession(loop=loop, conn_timeout=10) as session:
+    async with aiohttp.ClientSession(loop=loop, timeout = aiohttp.ClientTimeout(total=10)) as session:
         ctl_logs = await certlib.retrieve_all_ctls(session)
 
         if url:
@@ -249,7 +249,7 @@ def process_worker(result_info):
     return True
 
 async def get_certs_and_print():
-    async with aiohttp.ClientSession(conn_timeout=5) as session:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
         ctls = await certlib.retrieve_all_ctls(session)
         output = []
         for log in ctls:
