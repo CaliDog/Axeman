@@ -47,7 +47,7 @@ async def download_worker(session, log_info, work_deque, download_queue):
                 logging.error("Exception getting block {}-{}! {}".format(start, end, e))
         else:  # Notorious for else, if we didn't encounter a break our request failed 3 times D:
             with open('/tmp/fails.csv', 'a') as f:
-                f.write(",".join([log_info['url'], str(start), str(end)]))
+                f.write(",".join([log_info['url'], str(start), str(end)])+"\n")
             return
 
         for index, entry in zip(range(start, end + 1), entry_list['entries']):
