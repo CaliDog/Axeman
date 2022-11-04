@@ -25,7 +25,7 @@ except:
 
 from OpenSSL import crypto
 
-import certlib
+from . import certlib
 
 DOWNLOAD_CONCURRENCY = 50
 MAX_QUEUE_SIZE = 1000
