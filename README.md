@@ -19,7 +19,7 @@ pip3 install axeman
 ```
 $ axeman -h
 usage: axeman [-h] [-f LOG_FILE] [-s START_OFFSET] [-l] [-u CTL_URL]
-              [-o OUTPUT_DIR] [-v] [-c CONCURRENCY_COUNT]
+              [-z CTL_OFFSET] [-o OUTPUT_DIR] [-v] [-c CONCURRENCY_COUNT]
 
 Pull down certificate transparency list information
 
@@ -29,9 +29,11 @@ optional arguments:
   -s START_OFFSET       Skip N number of lists before starting
   -l                    List all available certificate lists
   -u CTL_URL            Retrieve this CTL only
+  -z CTL_OFFSET         The CTL offset to start at
   -o OUTPUT_DIR         The output directory to store certificates in
   -v                    Print out verbose/debug info
   -c CONCURRENCY_COUNT  The number of concurrent downloads to run at a time
+
 ```
 
 ## Demo
