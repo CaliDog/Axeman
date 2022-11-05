@@ -2,11 +2,12 @@ import argparse
 import asyncio
 from collections import deque
 
-import time
 import uvloop
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 import sys
+import time
+import json
 import math
 import base64
 import os
@@ -38,29 +39,18 @@ async def download_worker(session, log_info, work_deque, download_queue):
 
         logging.debug("[{}] Queueing up blocks {}-{}...".format(log_info['url'], start, end))
 
-        for x in range(30):
+        
+        for x in range(3):
             try:
                 async with session.get(certlib.DOWNLOAD.format(log_info['url'], start, end)) as response:
-                    if response.status == 429:
-                        logging.info("got http status {}-{}".format(x, response.status))
-                        time.sleep(min(x + 1, 10))
-                        continue
-                    if response.content_type != 'application/json':
-                        text = await response.text()
-                        logging.error("got response {}-{}-{}".format(x, response.content_type, text))
                     entry_list = await response.json()
                     logging.debug("[{}] Retrieved blocks {}-{}...".format(log_info['url'], start, end))
-                    if entry_list.get('error_code', '') == 'rate_limited':
-                        logging.info("{}-{}".format(x, entry_list))
-                        time.sleep(min(x + 1, 10))
-                        continue
                     break
             except Exception as e:
                 logging.error("Exception getting block {}-{}! {}".format(start, end, e))
-                time.sleep(min(x+1, 10))
         else:  # Notorious for else, if we didn't encounter a break our request failed 3 times D:
             with open('/tmp/fails.csv', 'a') as f:
-                f.write(",".join([log_info['url'], str(start), str(end)])+"\n")
+                f.write(",".join([log_info['url'], str(start), str(end)]))
             return
 
         for index, entry in zip(range(start, end + 1), entry_list['entries']):
@@ -87,7 +77,7 @@ async def queue_monitor(log_info, work_deque, download_results_queue):
         await asyncio.sleep(2)
 
 async def retrieve_certificates(loop, url=None, ctl_offset=0, output_directory='/tmp/', concurrency_count=DOWNLOAD_CONCURRENCY):
-    async with aiohttp.ClientSession(loop=loop, conn_timeout=10) as session:
+    async with aiohttp.ClientSession(loop=loop, timeout = aiohttp.ClientTimeout(total=10)) as session:
         ctl_logs = await certlib.retrieve_all_ctls(session)
 
         if url:
@@ -157,7 +147,7 @@ async def processing_coro(download_results_queue, output_dir="/tmp"):
         logging.debug("Got a chunk of {}. Mapping into process pool".format(process_pool.pool_workers))
 
         for entry in entries_iter:
-            csv_storage = '{}/certificates/{}'.format(output_dir, entry['log_info']['url'].replace('/', '_'))
+            csv_storage = '{}/certificates/{}'.format(output_dir, entry['log_info']['url'].replace('https://', ''))
             if not os.path.exists(csv_storage):
                 print("[{}] Making dir...".format(os.getpid()))
                 os.makedirs(csv_storage)
@@ -248,20 +238,24 @@ def process_worker(result_info):
     return True
 
 async def get_certs_and_print():
-    async with aiohttp.ClientSession(conn_timeout=5) as session:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
         ctls = await certlib.retrieve_all_ctls(session)
-        print("Found {} CTLs...".format(len(ctls)))
+        output = []
         for log in ctls:
             try:
                 log_info = await certlib.retrieve_log_info(log, session)
             except:
                 continue
 
-            print(log['description'])
-            print("    \- URL:            {}".format(log['url']))
-            print("    \- Owner:          {}".format(log_info['operated_by']))
-            print("    \- Cert Count:     {}".format(locale.format("%d", log_info['tree_size']-1, grouping=True)))
-            print("    \- Max Block Size: {}\n".format(log_info['block_size']))
+            output.append({
+                "description": log['description'],
+                "url": log['url'],
+                "owner": log_info['operated_by'],
+                "cert_count": log_info['tree_size']-1,
+                "max_block_size": log_info['block_size']
+            })
+
+        print(json.dumps(output, indent=4))
 
 def main():
     loop = asyncio.get_event_loop()
