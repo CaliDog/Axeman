@@ -158,7 +158,7 @@ async def processing_coro(download_results_queue, output_dir="/tmp"):
         logging.debug("Got a chunk of {}. Mapping into process pool".format(process_pool.pool_workers))
 
         for entry in entries_iter:
-            csv_storage = '{}/certificates/{}'.format(output_dir, entry['log_info']['url'].replace('/', '_'))
+            csv_storage = '{}/certificates/{}'.format(output_dir, entry['log_info']['url'].replace('https://', ''))
             if not os.path.exists(csv_storage):
                 print("[{}] Making dir...".format(os.getpid()))
                 os.makedirs(csv_storage)
