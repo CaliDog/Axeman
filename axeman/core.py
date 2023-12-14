@@ -211,13 +211,13 @@ def process_worker(result_info):
             # header = "url, cert_index, chain_hash, cert_der, all_domains, not_before, not_after"
             lines.append(
                 ",".join([
-                    result_info['log_info']['url'],
-                    str(entry['cert_index']),
-                    chain_hash,
-                    cert_data['leaf_cert']['as_der'],
-                    ' '.join(cert_data['leaf_cert']['all_domains']),
-                    str(cert_data['leaf_cert']['not_before']),
-                    str(cert_data['leaf_cert']['not_after'])
+                    "\"" + result_info['log_info']['url'] + "\"",
+                    "\"" + str(entry['cert_index']) + "\"",
+                    "\"" + chain_hash + "\"",
+                    "\"" + cert_data['leaf_cert']['as_der'] + "\"",
+                    "\"" + ' '.join(cert_data['leaf_cert']['all_domains']).replace("\"", "\"\"") + "\"",
+                    "\"" + str(cert_data['leaf_cert']['not_before']) + "\"",
+                    "\"" + str(cert_data['leaf_cert']['not_after']) + "\""
                 ]) + "\n"
             )
 
