@@ -12,7 +12,7 @@ CTL_INFO = "https://{}/ct/v1/get-sth"
 
 DOWNLOAD = "https://{}/ct/v1/get-entries?start={}&end={}"
 
-from construct import Struct, Byte, Int16ub, Int64ub, Enum, Bytes, Int24ub, this, GreedyBytes, GreedyRange, Terminated, Embedded
+from construct import Struct, Byte, Int16ub, Int64ub, Enum, Bytes, Int24ub, this, GreedyBytes, GreedyRange, Terminated
 
 MerkleTreeHeader = Struct(
     "Version"         / Byte,
@@ -34,7 +34,7 @@ CertificateChain = Struct(
 
 PreCertEntry = Struct(
     "LeafCert" / Certificate,
-    Embedded(CertificateChain),
+    "CertificateChain" / CertificateChain,
     Terminated
 )
 

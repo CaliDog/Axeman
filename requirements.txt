@@ -3,4 +3,4 @@ uvloop
 aiohttp
 aioprocessing
 PyOpenSSL
-construct==2.9.52
+construct

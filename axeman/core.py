@@ -190,7 +190,7 @@ def process_worker(result_info):
                 extra_data = certlib.PreCertEntry.parse(base64.b64decode(entry['extra_data']))
                 chain = [crypto.load_certificate(crypto.FILETYPE_ASN1, extra_data.LeafCert.CertData)]
 
-                for cert in extra_data.Chain:
+                for cert in extra_data.CertificateChain.Chain:
                     chain.append(
                         crypto.load_certificate(crypto.FILETYPE_ASN1, cert.CertData)
                     )
@@ -248,7 +248,7 @@ async def get_certs_and_print():
             print(log['description'])
             print("    \- URL:            {}".format(log['url']))
             print("    \- Owner:          {}".format(log_info['operated_by']))
-            print("    \- Cert Count:     {}".format(locale.format("%d", log_info['tree_size']-1, grouping=True)))
+            print("    \- Cert Count:     {}".format(locale.format_string("%d", log_info['tree_size']-1, grouping=True)))
             print("    \- Max Block Size: {}\n".format(log_info['block_size']))
 
 def main():
